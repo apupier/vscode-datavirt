@@ -20,6 +20,8 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as utils from './utils';
+import * as WebSocket from 'ws';
+import { LanguageClient, LanguageClientOptions, Executable, DidChangeConfigurationNotification, ServerOptions, TransportKind } from 'vscode-languageclient';
 import { DataVirtNodeProvider } from './model/tree/DataVirtNodeProvider';
 import { IDVConfig, IDataSourceConfig, IEnv } from './model/DataVirtModel';
 import { DataSourceTreeNode } from './model/tree/DataSourceTreeNode';
@@ -39,6 +41,8 @@ let pluginResourcesPath: string;
 let fileToNode: Map<string, SchemaTreeNode> = new Map();
 let fileToEditor: Map<string, vscode.TextEditor> = new Map();
 
+const LANGUAGE_CLIENT_ID = 'TEIID-DDL';
+
 export const TEMPLATE_NAME: string = '$!TEMPLATE!$';
 export const DATASOURCE_TYPES: Map<string, IDataSourceConfig> = new Map();
 
@@ -50,7 +54,63 @@ export function activate(context: vscode.ExtensionContext) {
 	DATASOURCE_TYPES.set('Google Sheets', new GoogleSheetsDataSource(TEMPLATE_NAME));
 	DATASOURCE_TYPES.set('Rest Based', new RestBasedDataSource(TEMPLATE_NAME));
 
-	dataVirtProvider = new DataVirtNodeProvider(vscode.workspace.rootPath, context);
+	if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
+		vscode.window.showErrorMessage(`DataVirt Tooling only works when a workspace folder is opened.` +
+		` Please add a folder to the workspace with 'File->Add Folder to Workspace' or use the Command Palette (Ctrl+Shift+P) and type 'Add Folder'.` +
+		` Once there is at least one folder in the workspace, please try again.`);
+		deactivate(context);
+		return;
+	}
+
+	let item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, Number.MIN_VALUE);
+	item.text = 'Starting TEIID Language Server...';
+	toggleItem(vscode.window.activeTextEditor, item);
+
+	// Options to control the language client
+	let clientOptions: LanguageClientOptions = {
+		documentSelector: ['sql'],
+		synchronize: {
+			configurationSection: ['sql'],
+			// Notify the server about file changes to .sql files contain in the workspace
+			fileEvents: [
+				vscode.workspace.createFileSystemWatcher('**/*.sql')
+			]
+		},
+		outputChannel: dataVirtExtensionOutputChannel
+	};
+
+	const host = 'localhost';
+	const socketPort = 8077;
+	let socket: WebSocket | null = null;
+	
+	vscode.commands.registerCommand('datavirt.connectlsp', () => {
+		// Establish websocket connection
+		socket = new WebSocket(`ws://${host}:${socketPort}/teiid-ddl-language-server`);
+		console.log(socket.readyState);
+	});
+
+	let serverOptions: ServerOptions = {
+		command: 'datavirt.connectlsp',
+		transport: TransportKind.socket
+	};
+
+	// Create the language client and start the client.
+	let languageClient = new LanguageClient(LANGUAGE_CLIENT_ID, 'Language Support for TEIID', serverOptions, clientOptions);
+	languageClient.onReady().then(() => {
+		item.text = 'TEIID Language Server started.';
+		toggleItem(vscode.window.activeTextEditor, item);
+	});
+
+	vscode.window.onDidChangeActiveTextEditor((editor) =>{
+		toggleItem(editor, item);
+	});
+
+	let disposable = languageClient.start();
+	// Push the disposable to the context's subscriptions so that the
+	// client can be deactivated on extension deactivation
+	context.subscriptions.push(disposable);
+
+	dataVirtProvider = new DataVirtNodeProvider(vscode.workspace.workspaceFolders[0].uri.fsPath, context);
 	creatDataVirtView();
 
 	vscode.window.onDidChangeVisibleTextEditors( event => {
@@ -78,7 +138,7 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(vscode.commands.registerCommand('datavirt.create.vdb', (ctx) => {
 		vscode.window.showInputBox( {placeHolder: "Enter the name of the new VDB config"})
 			.then( (fileName: string) => {
-				handleVDBCreation(vscode.workspace.rootPath, fileName)
+				handleVDBCreation(vscode.workspace.workspaceFolders[0].uri.fsPath, fileName)
 					.then( (success: boolean) => {
 						if (success) {
 							vscode.window.showInformationMessage(`New VDB ${fileName} has been created successfully...`);
@@ -485,4 +545,12 @@ function handleDeploy(filepath: string): void {
 
 function handleUndeploy(filepath: string): void {
 	log("\nUNDEPLOY: Selected File: " + filepath + "\n");
+}
+
+function toggleItem(editor: vscode.TextEditor, item) {
+	if(editor && editor.document && editor.document.languageId === 'sql') {
+		item.show();
+	} else{
+		item.hide();
+	}
 }
