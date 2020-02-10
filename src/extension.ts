@@ -21,7 +21,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as utils from './utils';
 import * as WebSocket from 'ws';
-import { LanguageClient, LanguageClientOptions, Executable, DidChangeConfigurationNotification, ServerOptions, TransportKind } from 'vscode-languageclient';
+import { LanguageClient, LanguageClientOptions, ServerOptions, StreamInfo } from 'vscode-languageclient';
 import { DataVirtNodeProvider } from './model/tree/DataVirtNodeProvider';
 import { IDVConfig, IDataSourceConfig, IEnv } from './model/DataVirtModel';
 import { DataSourceTreeNode } from './model/tree/DataSourceTreeNode';
@@ -82,16 +82,17 @@ export function activate(context: vscode.ExtensionContext) {
 	const host = 'localhost';
 	const socketPort = 8077;
 	let socket: WebSocket | null = null;
-	
-	vscode.commands.registerCommand('datavirt.connectlsp', () => {
-		// Establish websocket connection
-		socket = new WebSocket(`ws://${host}:${socketPort}/teiid-ddl-language-server`);
-		console.log(socket.readyState);
-	});
 
-	let serverOptions: ServerOptions = {
-		command: 'datavirt.connectlsp',
-		transport: TransportKind.socket
+	const serverOptions: ServerOptions = function() {
+		return new Promise((resolve) => {
+			socket = new WebSocket(`ws://${host}:${socketPort}/teiid-ddl-language-server`);
+			const messageStream = WebSocket.createWebSocketStream(socket, { encoding: 'utf8' });
+			const result: StreamInfo = {
+				writer: messageStream,
+				reader: messageStream
+			};
+		return resolve(result);
+		});
 	};
 
 	// Create the language client and start the client.
