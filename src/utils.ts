@@ -63,7 +63,7 @@ export function saveModelToFile(dvConfig: IDVConfig, file: string): void {
 
 export function getLabelFromKey(key: string, dsName: string, dsType: string): string {
 	let searchStr: string = `${dsType}_${dsName}_`.toUpperCase();
-	if (key.toUpperCase().startsWith(searchStr)) {
+	if (key?.toUpperCase().startsWith(searchStr)) {
 		return key.substring(searchStr.length+1);
 	}
 	return key;

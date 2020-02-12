@@ -38,6 +38,12 @@
 				"extensions": [
 					".sql"
 				]
+			},
+			{
+				"id": "ddl",
+				"extensions": [
+					".ddl"
+				]
 			}
 		],
 		"commands": [
@@ -154,7 +160,9 @@
 	"activationEvents": [
 		"onLanguage:sql",
 		"workspaceContains:*.sql",
-		"workspaceContains:*.yaml"
+		"workspaceContains:*.yaml",
+		"onLanguage:ddl",
+		"workspaceContains:*.ddl"
 	],
 	"scripts": {
 		"vscode:prepublish": "tsc -p ./",

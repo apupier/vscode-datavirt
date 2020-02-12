@@ -21,7 +21,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as utils from './utils';
 import * as WebSocket from 'ws';
-import { LanguageClient, LanguageClientOptions, ServerOptions, StreamInfo } from 'vscode-languageclient';
+import { LanguageClient, LanguageClientOptions, ServerOptions, StreamInfo, Message, ErrorAction, CloseAction } from 'vscode-languageclient';
 import { DataVirtNodeProvider } from './model/tree/DataVirtNodeProvider';
 import { IDVConfig, IDataSourceConfig, IEnv } from './model/DataVirtModel';
 import { DataSourceTreeNode } from './model/tree/DataSourceTreeNode';
@@ -41,7 +41,7 @@ let pluginResourcesPath: string;
 let fileToNode: Map<string, SchemaTreeNode> = new Map();
 let fileToEditor: Map<string, vscode.TextEditor> = new Map();
 
-const LANGUAGE_CLIENT_ID = 'TEIID-DDL';
+const LANGUAGE_CLIENT_ID = 'TEIID_DDL_LANGUAGE_ID';
 
 export const TEMPLATE_NAME: string = '$!TEMPLATE!$';
 export const DATASOURCE_TYPES: Map<string, IDataSourceConfig> = new Map();
@@ -62,54 +62,7 @@ export function activate(context: vscode.ExtensionContext) {
 		return;
 	}
 
-	let item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, Number.MIN_VALUE);
-	item.text = 'Starting TEIID Language Server...';
-	toggleItem(vscode.window.activeTextEditor, item);
-
-	// Options to control the language client
-	let clientOptions: LanguageClientOptions = {
-		documentSelector: ['sql'],
-		synchronize: {
-			configurationSection: ['sql'],
-			// Notify the server about file changes to .sql files contain in the workspace
-			fileEvents: [
-				vscode.workspace.createFileSystemWatcher('**/*.sql')
-			]
-		},
-		outputChannel: dataVirtExtensionOutputChannel
-	};
-
-	const host = 'localhost';
-	const socketPort = 8077;
-	let socket: WebSocket | null = null;
-
-	const serverOptions: ServerOptions = function() {
-		return new Promise((resolve) => {
-			socket = new WebSocket(`ws://${host}:${socketPort}/teiid-ddl-language-server`);
-			const messageStream = WebSocket.createWebSocketStream(socket, { encoding: 'utf8' });
-			const result: StreamInfo = {
-				writer: messageStream,
-				reader: messageStream
-			};
-		return resolve(result);
-		});
-	};
-
-	// Create the language client and start the client.
-	let languageClient = new LanguageClient(LANGUAGE_CLIENT_ID, 'Language Support for TEIID', serverOptions, clientOptions);
-	languageClient.onReady().then(() => {
-		item.text = 'TEIID Language Server started.';
-		toggleItem(vscode.window.activeTextEditor, item);
-	});
-
-	vscode.window.onDidChangeActiveTextEditor((editor) =>{
-		toggleItem(editor, item);
-	});
-
-	let disposable = languageClient.start();
-	// Push the disposable to the context's subscriptions so that the
-	// client can be deactivated on extension deactivation
-	context.subscriptions.push(disposable);
+	initializeDDLLanguageClient(context);
 
 	dataVirtProvider = new DataVirtNodeProvider(vscode.workspace.workspaceFolders[0].uri.fsPath, context);
 	creatDataVirtView();
@@ -284,6 +237,59 @@ export function activate(context: vscode.ExtensionContext) {
 
 		handleUndeploy(file);
 	}));
+}
+
+function initializeDDLLanguageClient(context: vscode.ExtensionContext) {
+	let item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, Number.MIN_VALUE);
+	item.text = 'Starting TEIID Language Server...';
+	toggleItem(vscode.window.activeTextEditor, item);
+	let clientOptions: LanguageClientOptions = {
+		documentSelector: ['sql', 'ddl'],
+		synchronize: {
+			configurationSection: ['sql', 'ddl'],
+			fileEvents: [
+				vscode.workspace.createFileSystemWatcher('**/*.sql'),
+				vscode.workspace.createFileSystemWatcher('**/*.ddl')
+			]
+		},
+		outputChannel: dataVirtExtensionOutputChannel,
+		errorHandler: {
+			error(error: Error, message: Message, count: number): ErrorAction {
+				console.log(error);
+				console.log(message);
+				return ErrorAction.Continue;
+			},
+			closed(): CloseAction {
+				console.log('closed');
+				return CloseAction.Restart;
+			}
+		}
+	};
+	const host = 'localhost';
+	const socketPort = 8077;
+	const serverOptions: ServerOptions = function () {
+		return new Promise((resolve) => {
+			let socket = new WebSocket(`ws://${host}:${socketPort}/teiid-ddl-language-server`);
+			const messageStream = WebSocket.createWebSocketStream(socket, {});
+			const result: StreamInfo = {
+				writer: messageStream,
+				reader: messageStream
+			};
+			return resolve(result);
+		});
+	};
+	let languageClient = new LanguageClient(LANGUAGE_CLIENT_ID, 'Language Support for TEIID', serverOptions, clientOptions);
+	languageClient.onReady().then(() => {
+		item.text = 'TEIID Language Server started.';
+		toggleItem(vscode.window.activeTextEditor, item);
+	}, error => {
+		console.log(error);
+	});
+	vscode.window.onDidChangeActiveTextEditor((editor) =>{
+		toggleItem(editor, item);
+	});
+	let disposable = languageClient.start();
+	context.subscriptions.push(disposable);
 }
 
 export function deactivate(context: vscode.ExtensionContext) {
