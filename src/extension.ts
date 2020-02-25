@@ -19,9 +19,11 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as rpc from 'vscode-ws-jsonrpc';
 import * as utils from './utils';
 import * as WebSocket from 'ws';
-import { LanguageClient, LanguageClientOptions, ServerOptions, StreamInfo, Message, ErrorAction, CloseAction } from 'vscode-languageclient';
+import ReconnectingWebSocket from 'reconnecting-websocket';
+import { LanguageClient, LanguageClientOptions, ServerOptions, StreamInfo, Message, ErrorAction, CloseAction, MessageTransports } from 'vscode-languageclient';
 import { DataVirtNodeProvider } from './model/tree/DataVirtNodeProvider';
 import { IDVConfig, IDataSourceConfig, IEnv } from './model/DataVirtModel';
 import { DataSourceTreeNode } from './model/tree/DataSourceTreeNode';
@@ -32,10 +34,12 @@ import { MongoDBDataSource } from './model/datasources/MongoDBDataSource';
 import { SalesForceDataSource } from './model/datasources/SalesForceDataSource';
 import { GoogleSheetsDataSource } from './model/datasources/GoogleSheetsDataSource';
 import { RestBasedDataSource } from './model/datasources/RestBasedDataSource';
+import { Duplex } from 'stream';
+import { IWebSocket } from 'vscode-ws-jsonrpc';
 
 let dataVirtExtensionOutputChannel: vscode.OutputChannel;
-let dataVirtTreeView : vscode.TreeView<vscode.TreeItem>;
-let dataVirtProvider : DataVirtNodeProvider;
+let dataVirtTreeView: vscode.TreeView<vscode.TreeItem>;
+let dataVirtProvider: DataVirtNodeProvider;
 let pluginResourcesPath: string;
 
 let fileToNode: Map<string, SchemaTreeNode> = new Map();
@@ -56,8 +60,8 @@ export function activate(context: vscode.ExtensionContext) {
 
 	if (!vscode.workspace.workspaceFolders || vscode.workspace.workspaceFolders.length === 0) {
 		vscode.window.showErrorMessage(`DataVirt Tooling only works when a workspace folder is opened.` +
-		` Please add a folder to the workspace with 'File->Add Folder to Workspace' or use the Command Palette (Ctrl+Shift+P) and type 'Add Folder'.` +
-		` Once there is at least one folder in the workspace, please try again.`);
+			` Please add a folder to the workspace with 'File->Add Folder to Workspace' or use the Command Palette (Ctrl+Shift+P) and type 'Add Folder'.` +
+			` Once there is at least one folder in the workspace, please try again.`);
 		deactivate(context);
 		return;
 	}
@@ -67,9 +71,9 @@ export function activate(context: vscode.ExtensionContext) {
 	dataVirtProvider = new DataVirtNodeProvider(vscode.workspace.workspaceFolders[0].uri.fsPath, context);
 	creatDataVirtView();
 
-	vscode.window.onDidChangeVisibleTextEditors( event => {
+	vscode.window.onDidChangeVisibleTextEditors(event => {
 		let k: string;
-		for( let [key, value] of fileToEditor) {
+		for (let [key, value] of fileToEditor) {
 			if (event.indexOf(value) === -1) {
 				let p = path.dirname(key);
 				if (fileToNode.has(key)) {
@@ -90,10 +94,10 @@ export function activate(context: vscode.ExtensionContext) {
 	pluginResourcesPath = context.asAbsolutePath('resources');
 
 	context.subscriptions.push(vscode.commands.registerCommand('datavirt.create.vdb', (ctx) => {
-		vscode.window.showInputBox( {placeHolder: "Enter the name of the new VDB config"})
-			.then( (fileName: string) => {
+		vscode.window.showInputBox({ placeHolder: "Enter the name of the new VDB config" })
+			.then((fileName: string) => {
 				handleVDBCreation(vscode.workspace.workspaceFolders[0].uri.fsPath, fileName)
-					.then( (success: boolean) => {
+					.then((success: boolean) => {
 						if (success) {
 							vscode.window.showInformationMessage(`New VDB ${fileName} has been created successfully...`);
 						} else {
@@ -104,12 +108,12 @@ export function activate(context: vscode.ExtensionContext) {
 	}));
 
 	context.subscriptions.push(vscode.commands.registerCommand('datavirt.create.datasource', (ctx) => {
-		vscode.window.showInputBox( {placeHolder: "Enter the name of the new datasource"})
-			.then( async (dsName: string) => {
-				await vscode.window.showQuickPick( Array.from(DATASOURCE_TYPES.keys()), {canPickMany: false, placeHolder: "Select the datasource type" })
-					.then( (dsType: string) => {
+		vscode.window.showInputBox({ placeHolder: "Enter the name of the new datasource" })
+			.then(async (dsName: string) => {
+				await vscode.window.showQuickPick(Array.from(DATASOURCE_TYPES.keys()), { canPickMany: false, placeHolder: "Select the datasource type" })
+					.then((dsType: string) => {
 						handleDataSourceCreation(ctx, dsName, dsType)
-							.then( (success: boolean) => {
+							.then((success: boolean) => {
 								if (success) {
 									vscode.window.showInformationMessage(`New datasource ${dsName} has been created successfully...`);
 								} else {
@@ -122,12 +126,12 @@ export function activate(context: vscode.ExtensionContext) {
 
 	context.subscriptions.push(vscode.commands.registerCommand('datavirt.edit.datasource', (ctx) => {
 		let ds: DataSourceTreeNode = ctx;
-		vscode.window.showInputBox( {value: ds.getKey().split(' ')[0]})
-			.then( async (dsName: string) => {
-				await vscode.window.showQuickPick( Array.from(DATASOURCE_TYPES.keys()), {canPickMany: false, placeHolder: ds.type })
-					.then( (dsType: string) => {
+		vscode.window.showInputBox({ value: ds.getKey().split(' ')[0] })
+			.then(async (dsName: string) => {
+				await vscode.window.showQuickPick(Array.from(DATASOURCE_TYPES.keys()), { canPickMany: false, placeHolder: ds.type })
+					.then((dsType: string) => {
 						handleDataSourceEdit(ctx, dsName, dsType)
-							.then( (success: boolean) => {
+							.then((success: boolean) => {
 								if (success) {
 									vscode.window.showInformationMessage(`DataSource has been modified...`);
 								} else {
@@ -140,7 +144,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	context.subscriptions.push(vscode.commands.registerCommand('datavirt.delete.datasource', (ctx) => {
 		handleDataSourceDeletion(ctx)
-			.then( (success: boolean) => {
+			.then((success: boolean) => {
 				if (success) {
 					vscode.window.showInformationMessage(`DataSource has been deleted...`);
 				} else {
@@ -150,12 +154,12 @@ export function activate(context: vscode.ExtensionContext) {
 	}));
 
 	context.subscriptions.push(vscode.commands.registerCommand('datavirt.create.datasourceentry', (ctx) => {
-		vscode.window.showInputBox( {placeHolder: "Enter the name of the new entry"})
-			.then( (eName: string) => {
-				vscode.window.showInputBox( {placeHolder: "Enter the value of the new entry"})
-					.then( (eValue: string) => {
+		vscode.window.showInputBox({ placeHolder: "Enter the name of the new entry" })
+			.then((eName: string) => {
+				vscode.window.showInputBox({ placeHolder: "Enter the value of the new entry" })
+					.then((eValue: string) => {
 						handleDataSourceEntryCreation(ctx, eName, eValue)
-							.then( (success: boolean) => {
+							.then((success: boolean) => {
 								if (success) {
 									vscode.window.showInformationMessage(`New datasource entry ${eName} has been created successfully...`);
 								} else {
@@ -168,10 +172,10 @@ export function activate(context: vscode.ExtensionContext) {
 
 	context.subscriptions.push(vscode.commands.registerCommand('datavirt.edit.datasourceentry', (ctx) => {
 		let item: DataSourceConfigEntryTreeNode = ctx;
-		vscode.window.showInputBox( {value: item.getValue()})
-			.then( ( newValue: string) => {
+		vscode.window.showInputBox({ value: item.getValue() })
+			.then((newValue: string) => {
 				handleDataSourceEntryEdit(ctx, item, newValue)
-					.then( (success: boolean) => {
+					.then((success: boolean) => {
 						if (success) {
 							vscode.window.showInformationMessage(`DataSource entry has been modified...`);
 						} else {
@@ -183,7 +187,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	context.subscriptions.push(vscode.commands.registerCommand('datavirt.delete.datasourceentry', (ctx) => {
 		handleDataSourceEntryDeletion(ctx)
-			.then( (success: boolean) => {
+			.then((success: boolean) => {
 				if (success) {
 					vscode.window.showInformationMessage(`DataSource entry has been deleted...`);
 				} else {
@@ -201,9 +205,9 @@ export function activate(context: vscode.ExtensionContext) {
 		vscode.workspace.openTextDocument(tempFile)
 			.then((a: vscode.TextDocument) => {
 				vscode.window.showTextDocument(a, 1, true)
-					.then( (editor: vscode.TextEditor) => {
+					.then((editor: vscode.TextEditor) => {
 						if (fileToNode.has(tempFile)) {
-							for ( let [key, value] of fileToNode) {
+							for (let [key, value] of fileToNode) {
 								if (value === sNode) {
 									fs.unlinkSync(key);
 									fs.rmdirSync(path.dirname(key));
@@ -269,8 +273,40 @@ function initializeDDLLanguageClient(context: vscode.ExtensionContext) {
 	const socketPort = 8077;
 	const serverOptions: ServerOptions = function () {
 		return new Promise((resolve) => {
-			let socket = new WebSocket(`ws://${host}:${socketPort}/teiid-ddl-language-server`);
-			const messageStream = WebSocket.createWebSocketStream(socket, {});
+			let socket = new WebSocket(`ws://${host}:${socketPort}/teiid-ddl-language-server`, { headers: {}, perMessageDeflate: false });
+
+
+			// rpc.createWebSocketConnection(socket, () => console.log()));
+			//let socket = new ReconnectingWebSocket(`ws://${host}:${socketPort}/teiid-ddl-language-server`);
+			const reader = new rpc.WebSocketMessageReader(socket);
+const writer = new rpc.WebSocketMessageWriter(socket);
+			rpc.listen({
+						webSocket: socket,
+						onConnection: (connection: rpc.MessageConnection) => {
+							//const notification = new rpc.NotificationType<string, void>('testNotification');
+							connection.listen();
+							//connection.sendNotification(notification, 'Hello World');
+							const plop: MessageTransports = {
+								writer: connection,
+								reader: connection
+							};
+						}
+					});
+			// 		let connection = rpc.createWebSocketConnection(socket, () => console.log('plop'));
+			// 		//const messageStream = WebSocket.createWebSocketStream(socket, { decodeStrings: false, readableObjectMode: true, writableObjectMode: true });
+
+			// 	});
+			const messageStream = WebSocket.createWebSocketStream(socket, { decodeStrings: false/*, readableObjectMode: true, writableObjectMode: true*/ });
+			// messageStream.addListener("data", (chunk) => {
+			// 	console.log(chunk);
+			// });
+			// messageStream.addListener("error", (chunk) => {
+			// 	console.log(chunk);
+			// });
+			// messageStream.addListener("readable", (chunk) => {
+			// 	console.log(chunk);
+			// });
+
 			const result: StreamInfo = {
 				writer: messageStream,
 				reader: messageStream
@@ -278,6 +314,7 @@ function initializeDDLLanguageClient(context: vscode.ExtensionContext) {
 			return resolve(result);
 		});
 	};
+
 	let languageClient = new LanguageClient(LANGUAGE_CLIENT_ID, 'Language Support for TEIID', serverOptions, clientOptions);
 	languageClient.onReady().then(() => {
 		item.text = 'TEIID Language Server started.';
@@ -285,12 +322,38 @@ function initializeDDLLanguageClient(context: vscode.ExtensionContext) {
 	}, error => {
 		console.log(error);
 	});
-	vscode.window.onDidChangeActiveTextEditor((editor) =>{
+	vscode.window.onDidChangeActiveTextEditor((editor) => {
 		toggleItem(editor, item);
 	});
 	let disposable = languageClient.start();
 	context.subscriptions.push(disposable);
 }
+
+class MyWebSocket extends WebSocket implements IWebSocket {
+	onMessage(cb: (data: any) => void): void {
+		if(cb instanceof WebSocket.MessageEvent) {
+			this.onmessage(cb as WebSocket.MessageEvent);
+		}
+	}
+	onError(cb: (reason: any) => void): void {
+		throw new Error("Method not implemented.");
+	}
+	onClose(cb: (code: number, reason: string) => void): void {
+		throw new Error("Method not implemented.");
+	}
+	dispose(): void {
+		this.dispose();
+	}
+
+	
+}
+
+// class ContentLengthRemoverDuplex extends Duplex {
+// 	let wrappedDuplex: Duplex;
+// 	constructor(duplex: Duplex) {
+// 		wrappedDuplex = duplex;
+// 	}
+// }
 
 export function deactivate(context: vscode.ExtensionContext) {
 	disposeExtensionOutputChannel();
@@ -325,13 +388,13 @@ function creatDataVirtView(): void {
 }
 
 function handleVDBCreation(filepath: string, fileName: string): Promise<boolean> {
-	return new Promise<boolean>( (resolve, reject) => {
-		if (fileName && fileName.length>0) {
+	return new Promise<boolean>((resolve, reject) => {
+		if (fileName && fileName.length > 0) {
 			try {
 				let templatePath = path.join(pluginResourcesPath, "vdb_template.yaml");
 				let targetFile: string = path.join(filepath, `${fileName}.yaml`);
 				fs.copyFileSync(templatePath, targetFile);
-				let yamlDoc:IDVConfig = utils.loadModelFromFile(targetFile);
+				let yamlDoc: IDVConfig = utils.loadModelFromFile(targetFile);
 				yamlDoc.metadata.name = fileName;
 				utils.saveModelToFile(yamlDoc, targetFile);
 				dataVirtProvider.refresh();
@@ -343,12 +406,12 @@ function handleVDBCreation(filepath: string, fileName: string): Promise<boolean>
 		} else {
 			log("handleVDBCreation: Unable to create the VDB because no name was given...");
 			resolve(false);
-		}		
+		}
 	});
 }
 
 function handleDataSourceCreation(ctx, dsName: string, dsType: string): Promise<boolean> {
-	return new Promise<boolean>( (resolve, reject) => {
+	return new Promise<boolean>((resolve, reject) => {
 		if (dsName && dsType) {
 			try {
 				let yaml: IDVConfig = ctx.getProject().dvConfig;
@@ -361,7 +424,7 @@ function handleDataSourceCreation(ctx, dsName: string, dsType: string): Promise<
 					resolve(true);
 				} else {
 					resolve(false);
-				}				
+				}
 			} catch (error) {
 				log(error);
 				resolve(false);
@@ -369,12 +432,12 @@ function handleDataSourceCreation(ctx, dsName: string, dsType: string): Promise<
 		} else {
 			log("handleDataSourceCreation: Unable to create the datasource because no name and type were given...");
 			resolve(false);
-		}		
+		}
 	});
 }
 
 function handleDataSourceEdit(ctx, dsName: string, dsType: string): Promise<boolean> {
-	return new Promise<boolean>( (resolve, reject) => {
+	return new Promise<boolean>((resolve, reject) => {
 		if (ctx) {
 			try {
 				let ds: DataSourceTreeNode = ctx;
@@ -385,7 +448,7 @@ function handleDataSourceEdit(ctx, dsName: string, dsType: string): Promise<bool
 					dsConfig.name = dsName;
 					dsConfig.type = dsType;
 					let newPrefix: string = utils.generateDataSourceConfigPrefix(dsConfig);
-					yaml.spec.env.forEach( (element: IEnv) => {
+					yaml.spec.env.forEach((element: IEnv) => {
 						if (element.name.startsWith(`${oldPrefix}_`)) {
 							element.name = element.name.replace(`${oldPrefix}_`, `${newPrefix}_`);
 						}
@@ -395,7 +458,7 @@ function handleDataSourceEdit(ctx, dsName: string, dsType: string): Promise<bool
 					resolve(true);
 				} else {
 					resolve(false);
-				}				
+				}
 			} catch (error) {
 				log(error);
 				resolve(false);
@@ -403,12 +466,12 @@ function handleDataSourceEdit(ctx, dsName: string, dsType: string): Promise<bool
 		} else {
 			log("handleDataSourceEdit: Unable to modify the datasource...");
 			resolve(false);
-		}		
+		}
 	});
 }
 
 function handleDataSourceDeletion(ctx): Promise<boolean> {
-	return new Promise<boolean>( (resolve, reject) => {
+	return new Promise<boolean>((resolve, reject) => {
 		if (ctx) {
 			try {
 				let ds: DataSourceTreeNode = ctx;
@@ -416,12 +479,12 @@ function handleDataSourceDeletion(ctx): Promise<boolean> {
 				let yaml: IDVConfig = ds.getProject().dvConfig;
 				let keys: IEnv[] = [];
 				if (yaml) {
-					yaml.spec.env.forEach( (element: IEnv) => {
+					yaml.spec.env.forEach((element: IEnv) => {
 						if (element.name.toUpperCase().startsWith(`${utils.generateDataSourceConfigPrefix(dsConfig).toUpperCase()}_`)) {
 							keys.push(element);
 						}
 					});
-					keys.forEach( (key) => {
+					keys.forEach((key) => {
 						yaml.spec.env.splice(yaml.spec.env.indexOf(key, 1));
 					});
 					utils.saveModelToFile(yaml, ds.getProject().getFile());
@@ -429,7 +492,7 @@ function handleDataSourceDeletion(ctx): Promise<boolean> {
 					resolve(true);
 				} else {
 					resolve(false);
-				}	
+				}
 			} catch (error) {
 				log(error);
 				resolve(false);
@@ -437,12 +500,12 @@ function handleDataSourceDeletion(ctx): Promise<boolean> {
 		} else {
 			log("handleDataSourceEdit: Unable to delete the datasource...");
 			resolve(false);
-		}		
+		}
 	});
 }
 
 function handleDataSourceEntryCreation(ctx, eName: string, eValue: string): Promise<boolean> {
-	return new Promise<boolean>( (resolve, reject) => {
+	return new Promise<boolean>((resolve, reject) => {
 		if (ctx) {
 			try {
 				let ds: DataSourceTreeNode = ctx;
@@ -460,7 +523,7 @@ function handleDataSourceEntryCreation(ctx, eName: string, eValue: string): Prom
 					resolve(true);
 				} else {
 					resolve(false);
-				}				
+				}
 			} catch (error) {
 				log(error);
 				resolve(false);
@@ -468,12 +531,12 @@ function handleDataSourceEntryCreation(ctx, eName: string, eValue: string): Prom
 		} else {
 			log("handleDataSourceEdit: Unable to delete the datasource...");
 			resolve(false);
-		}		
+		}
 	});
 }
 
 function handleDataSourceEntryEdit(ctx, item: DataSourceConfigEntryTreeNode, newValue: string): Promise<boolean> {
-	return new Promise<boolean>( (resolve, reject) => {
+	return new Promise<boolean>((resolve, reject) => {
 		if (ctx) {
 			try {
 				let yaml: IDVConfig = item.getProject().dvConfig;
@@ -487,7 +550,7 @@ function handleDataSourceEntryEdit(ctx, item: DataSourceConfigEntryTreeNode, new
 					resolve(true);
 				} else {
 					resolve(false);
-				}				
+				}
 			} catch (error) {
 				log(error);
 				resolve(false);
@@ -495,19 +558,19 @@ function handleDataSourceEntryEdit(ctx, item: DataSourceConfigEntryTreeNode, new
 		} else {
 			log("handleDataSourceEntryEdit: Unable to modify the datasource entry...");
 			resolve(false);
-		}		
+		}
 	});
 }
 
 function handleDataSourceEntryDeletion(ctx): Promise<boolean> {
-	return new Promise<boolean>( (resolve, reject) => {
+	return new Promise<boolean>((resolve, reject) => {
 		if (ctx) {
 			try {
 				let ds: DataSourceConfigEntryTreeNode = ctx;
 				let dsConfig: IDataSourceConfig = ds.getParent().dsConfig;
 				let yaml: IDVConfig = ds.getProject().dvConfig;
 				if (yaml) {
-					yaml.spec.env.forEach( (element: IEnv) => {
+					yaml.spec.env.forEach((element: IEnv) => {
 						if (element.name.toUpperCase() === utils.generateFullDataSourceConfigEntryKey(dsConfig, ds.getKey()).toUpperCase()) {
 							yaml.spec.env.splice(yaml.spec.env.indexOf(element, 0), 1);
 						}
@@ -517,7 +580,7 @@ function handleDataSourceEntryDeletion(ctx): Promise<boolean> {
 					resolve(true);
 				} else {
 					resolve(false);
-				}				
+				}
 			} catch (error) {
 				log(error);
 				resolve(false);
@@ -525,12 +588,12 @@ function handleDataSourceEntryDeletion(ctx): Promise<boolean> {
 		} else {
 			log("handleDataSourceEntryEdit: Unable to delete the datasource entry...");
 			resolve(false);
-		}		
+		}
 	});
 }
 
 function handleSaveDDL(event: vscode.TextDocumentWillSaveEvent): Promise<void> {
-	return new Promise<void>( (resolve, reject) => {
+	return new Promise<void>((resolve, reject) => {
 		let fileName: string = event.document.fileName;
 		let ddl: string = event.document.getText();
 		let sNode: SchemaTreeNode = fileToNode.get(fileName);
@@ -555,9 +618,9 @@ function handleUndeploy(filepath: string): void {
 }
 
 function toggleItem(editor: vscode.TextEditor, item) {
-	if(editor && editor.document && editor.document.languageId === 'sql') {
+	if (editor && editor.document && editor.document.languageId === 'sql') {
 		item.show();
-	} else{
+	} else {
 		item.hide();
 	}
 }
