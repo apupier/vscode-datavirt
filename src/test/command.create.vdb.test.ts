@@ -17,25 +17,6 @@ chai.use(sinonChai);
 
 describe('Create VDB Test', function () {
 
-	let sandbox: sinon.SinonSandbox;
-	let createOutputChannelSpy: sinon.SinonSpy;
-	
-	before(function () {
-		extension.disposeExtensionOutputChannel();
-		sandbox = sinon.createSandbox();
-		createOutputChannelSpy = sinon.spy(vscode.window, "createOutputChannel");
-	});
-
-	after(function () {
-		sandbox.restore();
-		createOutputChannelSpy.restore();
-		extension.disposeExtensionOutputChannel();
-	});
-
-	afterEach(function () {
-		createOutputChannelSpy.resetHistory();
-	});
-
 	it('Test generation of VDB project file', function (done) {
 		let name: string = 'tester';
 		let p: string = path.normalize(vscode.workspace.workspaceFolders[0].uri.fsPath);

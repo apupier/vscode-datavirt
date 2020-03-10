@@ -1,33 +1,17 @@
 'use strict';
 
 import * as chai from 'chai';
-import * as sinon from 'sinon';
 import * as sinonChai from 'sinon-chai';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as utils from '../utils';
-import { IDataSourceConfig, IDVConfig, IEnv } from '../model/DataVirtModel';
+import { IDataSourceConfig, IDVConfig } from '../model/DataVirtModel';
 import * as extension from '../extension';
-
-const YAML = require('yaml');
 
 const expect = chai.expect;
 chai.use(sinonChai);
 
 describe('Utils Functional Tests', function () {
-
-	let sandbox: sinon.SinonSandbox;
-
-	before(function () {
-		sandbox = sinon.createSandbox();
-	});
-
-	after(function () {
-		sandbox.restore();
-	});
-
-	afterEach(function () {
-	});
 
 	it('Test generation of datasource config prefix string', function () {
 		let dsConfig: IDataSourceConfig = {
@@ -90,21 +74,21 @@ describe('Utils Functional Tests', function () {
 		expect(dsConfig.name).to.be.equal(newName);
 	});
 
-	it('Test I/O of vdb', function () {6
+	it('Test I/O of vdb', function () {
 		let name: string = 'test';
 		let fpOrig: string = path.resolve(__dirname, '../../testFixture', `${name}.yaml`);
 		let fpTest: string = path.resolve(__dirname, '../../testFixture', `${name}2.yaml`);
 		let yamlDoc:IDVConfig = utils.loadModelFromFile(fpOrig);
-		expect(yamlDoc).to.not.be.undefined;
+		expect(yamlDoc, `Cannot load model from ${fpOrig}`).to.not.be.undefined;
 		utils.saveModelToFile(yamlDoc, fpTest);
-		expect(utils.validateFileNotExisting(name)).to.not.be.undefined;
+		expect(utils.validateFileNotExisting(name), `A file should exist in workspace with name "${name}" but utils method has not detected one.`).to.not.be.undefined;
 		let yamlDoc2:IDVConfig = utils.loadModelFromFile(fpTest);
-		expect(yamlDoc2).to.not.be.undefined;
+		expect(yamlDoc2, `Cannot load model from ${fpTest}`).to.not.be.undefined;
 		expect(yamlDoc.api_version).to.be.equal(yamlDoc2.api_version);
 		expect(yamlDoc.kind).to.be.equal(yamlDoc2.kind);
 		expect(yamlDoc.metadata.name).to.be.equal(yamlDoc2.metadata.name);
 		expect(yamlDoc.spec.env.length).to.be.equal(yamlDoc2.spec.env.length);
-		expect(yamlDoc2.spec.build.source.ddl).to.not.be.undefined;
+		expect(yamlDoc2.spec.build.source.ddl, `source ddl is missing from model loaded from ${fpTest}`).to.not.be.undefined;
 		fs.unlinkSync(fpTest);
 	});
 });
