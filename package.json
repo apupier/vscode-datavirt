@@ -121,6 +121,26 @@
 					"dark": "icons/dark/edit.svg",
 					"light": "icons/light/edit.svg"
 				}
+			},
+			{
+				"title": "Deploy (VDB only)",
+				"command": "datavirt.deploy.vdb",
+				"category": "dv"
+			},
+			{
+				"title": "Deploy (Full)",
+				"command": "datavirt.deploy.full",
+				"category": "dv"
+			},
+			{
+				"title": "Undeploy (VDB only)",
+				"command": "datavirt.undeploy.vdb",
+				"category": "dv"
+			},
+			{
+				"title": "Undeploy (Full)",
+				"command": "datavirt.undeploy.full",
+				"category": "dv"
 			}
 		],
 		"views": {
@@ -188,22 +208,54 @@
 				{
 					"command": "datavirt.edit.schema",
 					"when": "false"
+				},
+				{
+					"command": "datavirt.deploy.full",
+					"when": "false"
+				},
+				{
+					"command": "datavirt.deploy.vdb",
+					"when": "false"
+				},
+				{
+					"command": "datavirt.undeploy.vdb",
+					"when": "false"
+				},
+				{
+					"command": "datavirt.undeploy.full",
+					"when": "false"
 				}
 			],
 			"view/title": [
 				{
 					"group": "dv",
-					"command": "datavirt.create.vdb"
+					"command": "datavirt.create.vdb",
+					"when": "view == datavirt"
 				}
 			],
 			"view/item/context": [
 				{
 					"group": "dv@1",
-					"command": "datavirt.create.vdb",
-					"when": "viewItem == undefined"
+					"command": "datavirt.deploy.vdb",
+					"when": "viewItem == dv.project"
 				},
 				{
-					"group": "dv@1",
+					"group": "dv@2",
+					"command": "datavirt.deploy.full",
+					"when": "viewItem == dv.project"
+				},
+				{
+					"group": "dv@3",
+					"command": "datavirt.undeploy.vdb",
+					"when": "viewItem == dv.project"
+				},
+				{
+					"group": "dv@4",
+					"command": "datavirt.undeploy.full",
+					"when": "viewItem == dv.project"
+				},
+				{
+					"group": "dv_extra@1",
 					"command": "datavirt.delete.vdb",
 					"when": "viewItem == dv.project"
 				},
@@ -301,6 +353,9 @@
 	"activationEvents": [
 		"*"
 	],
+	"extensionDependencies": [
+		"ms-kubernetes-tools.vscode-kubernetes-tools"
+	],
 	"scripts": {
 		"vscode:prepublish": "tsc -p ./",
 		"compile": "tsc -p ./",
@@ -316,6 +371,7 @@
 		"path": "^0.12.7",
 		"tmp": "^0.2.1",
 		"vscode-languageclient": "^6.1.3",
+		"vscode-kubernetes-tools-api": "^1.2.0",
 		"yaml": "^1.10.0"
 	},
 	"devDependencies": {
